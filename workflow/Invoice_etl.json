@@ -1,0 +1,292 @@
+{
+  "name": "Invoice_etl",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": [
+          "message"
+        ],
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "id": "89cd51af-9fba-4b27-8222-d7d4b776fb17",
+      "name": "Telegram Trigger",
+      "webhookId": "fb497ecb-cc4c-43a9-abcc-372457b9fd56",
+      "credentials": {
+        "telegramApi": {
+          "id": "DAxaDPCna0uMDqiD",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "fileId": "={{$node[\"Telegram Trigger\"].json.message.photo[$node[\"Telegram Trigger\"].json.message.photo.length - 1].file_id}}",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        224,
+        0
+      ],
+      "id": "528f2a84-1aa5-443a-95a7-55b8f6b8fe42",
+      "name": "Get a file",
+      "webhookId": "54275201-701c-4bd5-bb44-51224f0141da",
+      "credentials": {
+        "telegramApi": {
+          "id": "DAxaDPCna0uMDqiD",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.ocr.space/parse/image",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "K83024371688957"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "parameterType": "formBinaryData",
+              "name": "file",
+              "inputDataFieldName": "data"
+            },
+            {
+              "name": "language",
+              "value": "spa"
+            },
+            {
+              "name": "OCREngine",
+              "value": "2"
+            },
+            {
+              "name": "isOverlayRequired",
+              "value": "false"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        448,
+        0
+      ],
+      "id": "868e31e4-dcc0-47a0-9274-082364423944",
+      "name": "HTTP Request"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-3.5-turbo",
+          "mode": "list",
+          "cachedResultName": "GPT-3.5-TURBO"
+        },
+        "responses": {
+          "values": [
+            {
+              "content": "=\nEXTRAE los datos de esta factura:\n\n{{ $json.ParsedResults[0].ParsedText }}\n\nDEVUELVE un JSON con estas claves:\n- proveedor: string o null\n- fecha: YYYY-MM-DD o null\n- numero_factura: string o null  \n- importe_total: número (float) o null\n- moneda: \"EUR\", \"USD\", o null\n- categoria: \"Alimentación\", \"Transporte\", \"Alquiler\", \"Servicios\", \"Tecnología\", \"Otros\" o null\n\nIMPORTANTE:\n1. Busca PATRONES en el texto, no inventes\n2. Para fecha: convierte cualquier formato a YYYY-MM-DD\n3. Para importe: extrae solo el número, sin símbolos\n4. Si no encuentras, usa null\n"
+            },
+            {
+              "role": "system",
+              "content": "Eres un asistente especializado en extraer datos estructurados de facturas. \nTu respuesta debe ser ÚNICAMENTE un objeto JSON válido, sin explicaciones, sin invenciones, sin markdown, sin texto adicional."
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {
+          "maxTokens": 500,
+          "temperature": 0
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.1,
+      "position": [
+        752,
+        0
+      ],
+      "id": "5a8a1735-abfb-46b3-b0da-e9feb940c24b",
+      "name": "Message a model",
+      "alwaysOutputData": true,
+      "credentials": {
+        "openAiApi": {
+          "id": "QrejUPAyZgX5wR1v",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// OpenAI ahora devuelve la respuesta directamente en $input.first().json.output[0].content[0].text\nconst content = $input.first().json.output[0].content[0].text || null;\n\nfunction extractJson(text) {\n  if (!text) return null;\n  const start = text.indexOf('{');\n  const end = text.lastIndexOf('}');\n  if (start === -1 || end === -1) return null;\n  try { \n    return JSON.parse(text.substring(start, end + 1)); \n  } catch (e) { \n    return null; \n  }\n}\n\nconst parsed = extractJson(content);\nif (!parsed) {\n  throw new Error(\"No se obtuvo JSON válido de OpenAI. Respuesta: \" + content);\n}\n\n// Normalizar importe_total\nif (parsed.importe_total && typeof parsed.importe_total === \"string\") {\n  let s = parsed.importe_total.replace(/\\s/g, \"\").replace(\"€\",\"\").replace(\"$\",\"\");\n  s = s.replace(/\\./g, \"\").replace(\",\", \".\");\n  const n = parseFloat(s);\n  parsed.importe_total = isNaN(n) ? null : n;\n}\n\n// Normalizar fecha (YYYY-MM-DD)\nif (parsed.fecha && typeof parsed.fecha === \"string\") {\n  const d = new Date(parsed.fecha);\n  if (!isNaN(d)) parsed.fecha = d.toISOString().split('T')[0];\n  else {\n    const m = parsed.fecha.match(/(\\d{1,2})[\\/\\-](\\d{1,2})[\\/\\-](\\d{2,4})/);\n    if (m) {\n      let day = m[1].padStart(2,'0'), month = m[2].padStart(2,'0'), year = m[3];\n      if (year.length === 2) year = '20' + year;\n      parsed.fecha = `${year}-${month}-${day}`;\n    } else parsed.fecha = null;\n  }\n}\n\n// Añadimos texto_ocr original si existe\nparsed.texto_ocr = $node[\"HTTP Request\"].json[\"texto_ocr\"] || null;\n\n// Meta\nparsed.fecha_procesamiento = new Date().toISOString();\n\nreturn [{ json: parsed }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1104,
+        0
+      ],
+      "id": "d6ed78d3-c866-4133-90b2-65a979aeb796",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "https://docs.google.com/spreadsheets/d/1YCSBnUdnkV1QbKrmaykF-2pf27VBYvEpxUtrqKsh6hc/edit?gid=0#gid=0",
+          "mode": "url"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Facturas",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        1312,
+        0
+      ],
+      "id": "8af2b26b-3b18-426a-a8d3-5a06ce9f3e0f",
+      "name": "Append row in sheet",
+      "credentials": {
+        "googleApi": {
+          "id": "3gQpDCIZF8oh3tFU",
+          "name": "Google Service Account account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram Trigger').item.json.message.chat.id }}",
+        "text": "=📄 Factura procesada correctamente\n\n🏢 Proveedor: {{ $json.proveedor || \"No identificado\" }}\n🧾 Nº de factura: {{ $json.numero_factura || \"No disponible\" }}\n📅 Fecha: {{ $json.fecha || \"No disponible\" }}\n💰 Importe total: {{ $json.importe_total ? $json.importe_total + \" \" + $json.moneda : \"No disponible\" }}\n🏷️ Categoría: {{ $json.categoria || \"Sin clasificar\" }}\n\n⏱️ Procesada el: {{ $json.fecha_procesamiento }}\n",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1520,
+        0
+      ],
+      "id": "3c67a5d7-13b5-438f-b2e7-1a72247470fc",
+      "name": "Send a text message",
+      "webhookId": "b87fb16e-7d4a-4032-8038-03a12777934a",
+      "credentials": {
+        "telegramApi": {
+          "id": "DAxaDPCna0uMDqiD",
+          "name": "Telegram account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "Get a file",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get a file": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request": {
+      "main": [
+        [
+          {
+            "node": "Message a model",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Message a model": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Append row in sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Append row in sheet": {
+      "main": [
+        [
+          {
+            "node": "Send a text message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "51755af0-4da4-4aa8-b4e4-099c0d195564",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "b122f9f64eb008d2cbb95afcf8b5c4c2dce2933725c743ed43a4433de134af42"
+  },
+  "id": "uXe6NzFY6wszh5NM",
+  "tags": []
+}
